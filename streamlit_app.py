@@ -7,7 +7,8 @@ st.set_page_config(page_title="미샵 GIF 생성기", layout="wide")
 # ===============================
 # ✅ Footer / Copyright (항상 보이게)
 # ===============================
-st.markdown("""
+st.markdown(
+    """
 <style>
 footer {visibility: hidden;}
 div[data-testid="stAppViewContainer"] .main { padding-bottom: 90px; }
@@ -27,26 +28,21 @@ div[data-testid="stAppViewContainer"] .main { padding-bottom: 90px; }
 }
 </style>
 <div class="misharp-footer">© 2026 미샵(MISHARP) · 실무 자동화 도구</div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 st.title("미샵 GIF 생성기")
-import PIL
-import gif_utils
-
-st.sidebar.caption(f"Pillow version: {PIL.__version__}")
-st.sidebar.caption(f"gif_utils file: {gif_utils.__file__}")
-
 st.caption("이미지→GIF / 동영상→GIF (웹용 최적화)")
 
 tab_img, tab_vid = st.tabs(["이미지 → GIF", "동영상 → GIF"])
 
 # ===============================
 # ✅ session_state 기본값
-# - img_upload_token: 업로드 파일이 '정말 바뀐 경우'만 갱신하기 위한 토큰
 # ===============================
 defaults = {
-    "uploaded_items": [],      # [{"name":..., "bytes":...}, ...]
-    "img_upload_token": None,  # ✅ 업로드 덮어쓰기 방지 핵심
+    "uploaded_items": [],  # [{"name":..., "bytes":...}, ...]
+    "img_upload_token": None,  # 업로드가 '진짜 바뀐 경우'만 갱신
     "vid_fps": 8,
     "vid_width": 450,
     "vid_colors": 64,
@@ -64,12 +60,33 @@ for k, v in defaults.items():
 # Sidebar
 # ===============================
 with st.sidebar:
-    st.header("이미지 → GIF 옵션")
+    st.header("이미지 → GIF 옵션 (포토샵급)")
+
     delay = st.slider("프레임 간격(초)", 0.5, 10.0, 1.0, 0.5, key="img_delay")
     loop_forever_img = st.checkbox("무한 루프(Forever)", value=True, key="img_loop")
     unify_canvas = st.checkbox("사이즈 섞이면 자동 통일(패딩)", value=True, key="img_unify")
-    max_width_img = st.selectbox("최대 가로폭(선택)", ["원본 유지", 450, 720, 900, 1080], index=0, key="img_max_width")
+
+    max_width_img = st.selectbox(
+        "최대 가로폭",
+        ["원본 유지", 450, 720, 900, 1080],
+        index=1,  # ✅ 기본값 450
+        key="img_max_width",
+    )
     max_width_img_val = None if max_width_img == "원본 유지" else int(max_width_img)
+
+    # ✅ 핵심: 포토샵 Save for Web 느낌 옵션
+    img_colors = st.selectbox(
+        "색상 수(팔레트)",
+        [256, 128, 96, 64],
+        index=0,  # ✅ 기본값 256
+        key="img_colors",
+    )
+    img_dither = st.selectbox(
+        "디더링",
+        ["floyd_steinberg", "bayer", "none"],
+        index=0,  # ✅ 기본값 floyd_steinberg(= Diffusion 느낌)
+        key="img_dither",
+    )
 
     st.divider()
     st.header("동영상 → GIF 옵션 (초경량 기본)")
@@ -100,11 +117,8 @@ with st.sidebar:
     st.divider()
     st.caption("© 2026 미샵(MISHARP) · 실무 자동화 도구")
 
-
 # ===============================
 # TAB 1: 이미지 → GIF
-# ✅ 업로드 후 ⬆⬇ 정렬 (썸네일 포함)
-# ✅ 토큰 기반으로 업로드가 정렬을 덮어쓰지 않게 처리
 # ===============================
 with tab_img:
     st.subheader("이미지 → GIF")
@@ -114,7 +128,7 @@ with tab_img:
         "이미지 여러 장 업로드 (JPG/PNG/GIF/WEBP/BMP/TIFF/PSD)",
         type=["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "psd"],
         accept_multiple_files=True,
-        key="img_uploader"
+        key="img_uploader",
     )
 
     # ✅ 업로드가 '진짜 바뀐 경우에만' 갱신 (정렬 유지 핵심)
@@ -128,13 +142,11 @@ with tab_img:
         st.info("이미지를 업로드해 주세요.")
     else:
         st.markdown("### 업로드된 이미지 순서(⬆⬇로 이동)")
-
-        items = list(st.session_state.uploaded_items)  # ✅ 복사본
+        items = list(st.session_state.uploaded_items)  # 복사본
         thumb_w = 90
 
         for i, item in enumerate(items):
-            uid = f"{item['name']}_{i}"  # ✅ key 안정화
-
+            uid = f"{item['name']}_{i}"
             col_thumb, col_name, col_up, col_down = st.columns([1.2, 8, 1, 1])
 
             with col_thumb:
@@ -148,14 +160,14 @@ with tab_img:
 
             with col_up:
                 if st.button("⬆", key=f"img_up_{uid}", disabled=(i == 0)):
-                    items[i-1], items[i] = items[i], items[i-1]
-                    st.session_state.uploaded_items = items  # ✅ 재할당(필수)
+                    items[i - 1], items[i] = items[i], items[i - 1]
+                    st.session_state.uploaded_items = items
                     st.rerun()
 
             with col_down:
-                if st.button("⬇", key=f"img_down_{uid}", disabled=(i == len(items)-1)):
-                    items[i+1], items[i] = items[i], items[i+1]
-                    st.session_state.uploaded_items = items  # ✅ 재할당(필수)
+                if st.button("⬇", key=f"img_down_{uid}", disabled=(i == len(items) - 1)):
+                    items[i + 1], items[i] = items[i], items[i + 1]
+                    st.session_state.uploaded_items = items
                     st.rerun()
 
         st.divider()
@@ -173,13 +185,15 @@ with tab_img:
         if st.button("GIF 만들기", type="primary", key="img_make"):
             ordered_pairs = [(x["name"], x["bytes"]) for x in st.session_state.uploaded_items]
 
-            with st.spinner("고화질 GIF 생성 중..."):
+            with st.spinner("포토샵급 고화질 GIF 생성 중..."):
                 gif_bytes = build_gif_from_images(
                     files=ordered_pairs,
                     delay_sec=float(delay),
                     loop_forever=bool(loop_forever_img),
                     unify_canvas=bool(unify_canvas),
                     max_width=max_width_img_val,
+                    colors=int(img_colors),     # ✅ 핵심 전달
+                    dither=str(img_dither),     # ✅ 핵심 전달
                 )
 
             if not gif_bytes:
@@ -192,9 +206,8 @@ with tab_img:
                     data=gif_bytes,
                     file_name="misharp_images.gif",
                     mime="image/gif",
-                    key="img_download"
+                    key="img_download",
                 )
-
 
 # ===============================
 # TAB 2: 동영상 → GIF
@@ -207,7 +220,7 @@ with tab_vid:
         "동영상 업로드 (MP4/MOV/WEBM 등)",
         type=["mp4", "mov", "m4v", "avi", "webm"],
         accept_multiple_files=False,
-        key="vid_uploader"
+        key="vid_uploader",
     )
 
     if st.button("동영상 GIF 만들기", type="primary", disabled=not vfile, key="vid_make"):
@@ -236,7 +249,7 @@ with tab_vid:
                 data=gif_bytes,
                 file_name="misharp_video.gif",
                 mime="image/gif",
-                key="vid_download"
+                key="vid_download",
             )
 
             if size_mb > 20:
