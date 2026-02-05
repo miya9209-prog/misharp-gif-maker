@@ -30,6 +30,12 @@ div[data-testid="stAppViewContainer"] .main { padding-bottom: 90px; }
 """, unsafe_allow_html=True)
 
 st.title("미샵 GIF 생성기")
+import PIL
+import gif_utils
+
+st.sidebar.caption(f"Pillow version: {PIL.__version__}")
+st.sidebar.caption(f"gif_utils file: {gif_utils.__file__}")
+
 st.caption("이미지→GIF / 동영상→GIF (웹용 최적화)")
 
 tab_img, tab_vid = st.tabs(["이미지 → GIF", "동영상 → GIF"])
