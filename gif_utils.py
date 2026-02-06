@@ -1,6 +1,7 @@
 # gif_utils.py
 # 미샵 이미지 -> GIF (포토샵 Save for Web 느낌)
-# 핵심: 팔레트 고정(전체 프레임 기반) + 디더링 + optimize=False + 캔버스 통일(옵션)
+# 핵심: 팔레트 고정(여러 프레임 기반) + 디더링 + optimize=False + 캔버스 통일(옵션)
+# ✅ Streamlit Cloud/Pillow 환경에서 quantize ValueError 방지용 fallback 포함
 
 from __future__ import annotations
 
@@ -61,16 +62,34 @@ def _dither_mode(dither: str):
     return Image.Dither.NONE
 
 
-def _best_quantize_method():
+def _quantize_safe(im: Image.Image, colors: int) -> Image.Image:
     """
-    Pillow가 libimagequant를 지원하면 그게 사진 GIF에 훨씬 유리.
-    환경에 없을 수 있으니 안전하게 fallback.
+    ✅ 핵심:
+    - Streamlit Cloud 환경에서 LIBIMAGEQUANT가 enum은 있어도 실제 빌드가 없으면 ValueError가 남.
+    - 그래서 여러 method로 순차 fallback.
     """
-    # Pillow enum 존재 여부/지원 여부가 환경마다 달라서 try로 처리
+    colors = 256 if colors > 256 else (2 if colors < 2 else int(colors))
+
+    methods = []
+    # 존재하면 후보에 넣되, 실패 가능성이 있어 try로 안전 처리
+    for name in ("LIBIMAGEQUANT", "FASTOCTREE", "MEDIANCUT"):
+        m = getattr(Image.Quantize, name, None)
+        if m is not None:
+            methods.append(m)
+
+    last_err = None
+    for m in methods:
+        try:
+            return im.quantize(colors=colors, method=m, dither=Image.Dither.NONE)
+        except Exception as e:
+            last_err = e
+            continue
+
+    # 그래도 실패하면 method 파라미터 없이 한 번 더(최후의 수단)
     try:
-        return Image.Quantize.LIBIMAGEQUANT
-    except Exception:
-        return Image.Quantize.MEDIANCUT
+        return im.quantize(colors=colors, dither=Image.Dither.NONE)
+    except Exception as e:
+        raise RuntimeError(f"quantize failed. last={last_err!r}, final={e!r}") from e
 
 
 def _build_palette_seed_from_frames(
@@ -79,17 +98,14 @@ def _build_palette_seed_from_frames(
     sample_count: int = 12,
 ) -> Image.Image:
     """
-    ✅ 핵심 개선:
-    - 팔레트를 첫 프레임 1장으로 뽑지 말고,
-      여러 프레임을 샘플링해서 '팔레트 시드'를 만듦.
-    - 이렇게 해야 프레임마다 색/명암이 조금씩 달라도 덜 깨짐.
+    ✅ 팔레트를 여러 프레임 기반으로 만들기 (프레임마다 깨짐/깜빡임 감소)
+    ✅ quantize ValueError 방지: _quantize_safe 사용
     """
     if not frames:
         raise ValueError("frames empty")
 
-    colors = 256 if colors > 256 else (2 if colors < 2 else colors)
+    colors = 256 if colors > 256 else (2 if colors < 2 else int(colors))
 
-    # 샘플링: 앞/중간/뒤 골고루
     n = len(frames)
     if n <= sample_count:
         picks = list(range(n))
@@ -97,18 +113,13 @@ def _build_palette_seed_from_frames(
         step = max(1, n // sample_count)
         picks = list(range(0, n, step))[:sample_count]
 
-    # 샘플 프레임을 세로로 이어붙인 "팔레트용 큰 이미지" 생성
     w, h = frames[0].size
     stack = Image.new("RGB", (w, h * len(picks)))
     for idx, fi in enumerate(picks):
         stack.paste(frames[fi], (0, idx * h))
 
-    method = _best_quantize_method()
-    palette_seed = stack.quantize(
-        colors=colors,
-        method=method,
-        dither=Image.Dither.NONE,
-    )
+    # ✅ 여기서 안전 quantize
+    palette_seed = _quantize_safe(stack, colors=colors)
     return palette_seed
 
 
@@ -121,14 +132,9 @@ def build_gif_from_images(
     colors: int = 256,
     dither: str = "floyd_steinberg",
 ) -> Optional[bytes]:
-    """
-    files: [(filename, bytes), ...]
-    return: gif bytes
-    """
     if not files:
         return None
 
-    # 1) 로드 + RGB 합성 + 리사이즈
     frames: List[Image.Image] = []
     for _, b in files:
         im = _open_from_bytes(b)
@@ -140,22 +146,18 @@ def build_gif_from_images(
     if not frames:
         return None
 
-    # 2) 캔버스 통일(옵션)
     if unify_canvas:
         frames = _unify_canvas(frames, bg_rgb=(255, 255, 255))
 
-    # 3) ✅ 팔레트 "전체 프레임 기반"으로 고정 시드 생성 (여기가 품질 핵심)
     colors = int(colors)
     palette_seed = _build_palette_seed_from_frames(frames, colors=colors, sample_count=12)
 
-    # 4) 모든 프레임을 "같은 팔레트"로 변환 + 디더링(사용자 선택)
     dither_mode = _dither_mode(dither)
     pal_frames: List[Image.Image] = []
     for im in frames:
         q = im.quantize(palette=palette_seed, dither=dither_mode)
         pal_frames.append(q)
 
-    # 5) 저장 (optimize=False가 품질 안정에 중요)
     duration_ms = int(round(float(delay_sec) * 1000))
     out = BytesIO()
 
